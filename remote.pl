@@ -61,7 +61,7 @@ while(<CONFFILE>) {
   # PULL:pool:lpath:rpath:when:
   elsif($line =~ /^PULL:(.*):~:(.*):~:(.*):~:(.*):~:$/) { 
   } else {
-    print "I didn't recognize this line: $line\n"
+    print "I didn't recognize this line: $line"
   }
 
 
