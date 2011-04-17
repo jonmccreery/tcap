@@ -1,0 +1,52 @@
+# POOL:name:user:pss:
+# PULL:pool:file:when:
+# MEMBER:pool:ip/host:
+# COMMAND:pool:command:when:clean:
+
+POOL:BE:root:lab4@tt:
+POOL:FE:root:lab4@tt:
+
+MEMBER:BE:155.165.231.17:
+MEMBER:BE:155.165.231.18:
+MEMBER:FE:155.165.231.14:
+MEMBER:FE:155.165.231.15:
+MEMBER:FE:155.165.231.16:
+
+# ************* Set up environment **************
+COMMAND:ALL:touch running:before::
+COMMAND:ALL:mkdir mqueue; mount -t mqueue none mqueue:before::
+COMMAND:ALL:date +%s > start_time.txt:before::
+PULL:ALL:start_time.txt:.:after:
+
+COMMAND:ALL:lvdisplay | awk '/LV Name/{n=\$3} /Block device/{d=\$3; sub(\".*:\",\"dm-\",d); print d,n;}' > lv.txt:before::
+PULL:ALL:lv.txt:.:after:
+
+# ************* BE Commands **************
+COMMAND:BE:export PP_DISPLAY_TIME_STAMP=TIME_VERBOSE:before::
+COMMAND:BE:(nohup powermt display every=${INTERVAL} >> powermt.log &):during:clean:
+PULL:BE:powermt.log:.:after:
+
+# ************* Commands for ALL **************
+COMMAND:ALL:nmon -f -t -s5 -c1440:before:clean:
+PULL:ALL:*.nmon:.:after:
+
+COMMAND:ALL:(nohup iostat -x ${INTERVAL} 1440 >> iostat_x.log &):during:clean:
+PULL:ALL:iostat_x.log:.:after:
+
+COMMAND:ALL:(nohup vmstat -n ${INTERVAL} 1440 >> vmstat.log &):during:clean:
+PULL:ALL:vmstat.log:.:after:
+
+COMMAND:ALL:(nohup sh -c 'while [ -f running ]; do ps -ef >> ps.log; sleep 5; done' &):during:clean:
+PULL:ALL:ps.log:.:after:
+
+COMMAND:ALL:(nohup sh -c 'while [ -f running ]; do for i in \$(ls mqueue); do echo \$i >> queues.log; cat mqueue/\$i >> queues.log; done; sleep 5; done' &):during:clean:
+PULL:ALL:queues.log:.:after:
+
+COMMAND:BE:tail -n 1000 /opt/Nokia/SS_MMSC_INFORMIX/etc/online.log > online.log:after::
+PULL:BE:online.log:.:after:
+
+COMMAND:ALL:dmesg > dmesg.log;:after::
+PULL:ALL:dmesg.log:.:after:
+
+COMMAND:ALL:cp /var/log/messages messages.log;:after::
+PULL:ALL:messages.log:.:after:
