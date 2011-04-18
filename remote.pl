@@ -85,11 +85,11 @@ sub parse_conf() {
 		  push(@$push_aref, \@push_atom);
 		}
       } elsif (exists $pools{ $label }) {
-		if ($epoch == "before") {
+		if ($epoch eq "before") {
           my $push_aref = $pools{ $label }[3];
 		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
 		  push(@$push_aref, \@push_atom);
-		} elsif ($epoch == "after") {
+		} elsif ($epoch eq "after") {
 		  my $push_aref = $pools{ $label }[4];
 		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
 		  push(@$push_aref, \@push_atom);
