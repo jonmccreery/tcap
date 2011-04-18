@@ -3,7 +3,6 @@
 # The Ur symbol.  Everything starts here.
 %pools;
 
-
 sub parse_conf() {
   my $conf = shift;
 
@@ -18,7 +17,8 @@ sub parse_conf() {
 
 	# pools are where everything starts...  Therefore, the first thing we do
 	# is pull the 'POOL' lines out and populate the %pools hash...  all other operations
-	# have a 'tag' argument (2nd field) that ties that operation to its pool.
+	# have a 'tag' argument (2nd field) that ties that operation to its pool.  We use
+	# this to index into the %pools hash.
     # POOL:label:user:pass
     if($line =~ /^POOL:~:(.*):~:(.*):~:(.*):~:$/) {
 #      print "P - $1 - $2 - $3\n";
@@ -48,9 +48,9 @@ sub parse_conf() {
         foreach my $pool (keys %pools) {   
           my $cmd_aref = $pools{ $pool }[5];
           push(@$cmd_aref, $command);
-          $num_cmds = scalar @{$cmd_aref};
+          $num_cmds = scalar @{ $cmd_aref };
         } 
-      } elsif(exists $pools{$label}) {     # Have we seen this pool name?
+      } elsif(exists $pools{ $label }) {     # Have we seen this pool name?
         my $cmd_aref = $pools{ $label }[5];
         push(@$cmd_aref, $command);
         $num_cmds = scalar @{$cmd_aref};
@@ -59,23 +59,72 @@ sub parse_conf() {
       } 
     }
 
-    # MEMBER:pool:hostname:
-    elsif($line =~ /^MEMBER:(.*):~:(.*):~:$/) {
-      my ($label, $hostname) = $1, $2;
-
-
-
+    # MEMBER:label:hostname:
+    elsif($line =~ /^MEMBER:~:(.*):~:(.*):~:$/) {
+#      print "M - $1 - $2\n";
+      my ($label, $hostname) = ($1, $2);
+      if(exists $pools{ $label }) {
+	    my $targets_aref = $pools{ $label }[2];
+		push(@$targets_aref, $hostname);
+	  } else {
+	    die "A MEMBER command referenced a pool that isn't defined.  Aborting."
+      }
     }
 
-    # PUSH:pool:lpath:rpath:when:
-    elsif($line =~ /^PUSH:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
+    # PUSH:label:lpath:rpath:epoch:clean:
+    elsif($line =~ /^PUSH:~:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
+      my ($label, $lpath, $rpath, $epoch, $clean) = ($1, $2, $3, $4);
+	  if($label =~ /ALL/) {
+	    foreach my $pool (keys %pools) {
+		  if    ($epoch eq "before") { $idx = 3; }
+		  elsif ($epoch eq "after")  { $idx = 4; }
+		  else  { die "Invalid epoch." }
 
-      my ($label, $command, $epoch, $clean) = ($1, $2, $3, $4);
+		  my $push_aref = $pools{ $pool }[$idx];
+		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
+		  push(@$push_aref, \@push_atom);
+		}
+      } elsif (exists $pools{ $label }) {
+		if ($epoch == "before") {
+          my $push_aref = $pools{ $label }[3];
+		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
+		  push(@$push_aref, \@push_atom);
+		} elsif ($epoch == "after") {
+		  my $push_aref = $pools{ $label }[4];
+		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
+		  push(@$push_aref, \@push_atom);
+		} else {
+		  die "Invalid epoch.";
+		}
+	  } else { die "A PUSH command referenced a pool that isn't defined. Aborting." }
     }
 
-    # PULL:pool:lpath:rpath:when:
-    elsif($line =~ /^PULL:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
-      my ($label, $command, $epoch, $clean) = ($1, $2, $3, $4);
+    # PULL:pool:lpath:rpath:epoch:
+    elsif($line =~ /^PULL:~:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
+      my ($label, $lpath, $rpath, $epoch) = ($1, $2, $3, $4);
+	  if($label =~ /ALL/) {
+	    foreach my $pool (keys %pools) {
+		  if    ($epoch eq "before") { $idx = 3; }
+		  elsif ($epoch eq "after")  { $idx = 4; }
+		  else  { die "invalid epoch." }
+
+		  my $push_aref = $pools{ $pool }[$idx];
+		  my @push_atom = ("PULL", $lpath, $rpath, $clean);
+		  push(@$push_aref, \@push_atom);
+		}
+      } elsif (exists $pools{ $label }) {
+		if ($epoch eq "before") {
+          my $push_aref = $pools{ $label }[3];
+		  my @push_atom = ("PULL", $lpath, $rpath, $clean);
+		  push(@$push_aref, \@push_atom);
+		} elsif ($epoch eq "after") {
+		  my $push_aref = $pools{ $label }[4];
+		  my @push_atom = ("PULL", $lpath, $rpath, $clean);
+		  push(@$push_aref, \@push_atom);
+		} else {
+		  die "Invalid epoch.";
+		}
+	  } else { die "A PULL command referenced a pool that isn't defined. Aborting." }
     } else {
       print "I didn't recognize this line: $line"
     }
@@ -84,10 +133,35 @@ sub parse_conf() {
 
 sub dump_struct() {
   while (my ($key, $value) = each(%pools)) {
-      my $cmd_list_aref = $$value[5];
-      print "I'm seeing " . scalar @$cmd_list_aref . " commands for pool $key:\n";
-      foreach(@$cmd_list_aref) { print "  command for pool $key: " . $_ . "\n"; }
-#      print "dump: $qarray_ref => " . scalar @$qarray_ref . "\n";
+	  my $pool         = $key;
+	  my $user         = $$value[0];
+	  my $pass         = $$value[1];
+	  my $targets_aref = $$value[2];
+      my $cmds_aref    = $$value[5];
+	  my $befores_aref = $$value[3];
+	  my $afters_aref  = $$value[4];
+
+	  print "Pool: $pool user: $user pass: $pass\n";
+	  foreach(@$targets_aref) { my $tgt = $_; print "  tgt: $tgt \n"; }
+      foreach(@$cmds_aref)    { my $cmd = $_; print "  cmd: $cmd \n"; }
+      foreach(@$befores_aref) { 
+	    my $before = $_;
+		my $cmd    = $$before[0];
+		my $local  = $$before[1];
+		my $remote = $$before[2];
+		my $clean  = $$before[3];
+
+		print "  before: $cmd: $local: $remote\n"; 
+	  }
+      foreach(@$afters_aref) { 
+	    my $after = $_;
+		my $cmd    = $$after[0];
+		my $local  = $$after[1];
+		my $remote = $$after[2];
+		my $clean  = $$after[3];
+
+		print "  after: $cmd: $local: $remote\n"; 
+	  }
       print "\n";
   }
 }
