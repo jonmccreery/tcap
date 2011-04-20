@@ -1,9 +1,55 @@
 #!/usr/bin/perl
 
-use Getopt::Long;
+# Globals
+
+$DBG = 1;
 
 # The Ur symbol.  Everything starts here.
-%pools;
+my %pools;
+my $hosttag;
+
+use Getopt::Long; # qw(:config debug);
+
+# ***** Main
+
+if(@ARGV < 2) {
+  die "I need you to feed me commands like this: tcap <command> -f <config_file>";
+}
+
+GetOptions('clean'    => \$opt_c,
+           'go'       => \$opt_g,
+           'stop'     => \$opt_s,
+           'pull'     => \$opt_p,
+           'file=s'   => \$opt_f);
+
+if(!defined $opt_f) {
+  print "The -f argument specifying the config file to use is mandatory.\n";
+  exit 1;
+}
+
+# Cram the template into memory...  When this sub exits, we can assume the
+# template file was well formed, but no checks have been done on any targets.
+&parse_conf($opt_f);
+
+if($DBG) { &dump_struct(); }
+
+$hosttag = &generate_host_tag();
+
+if(defined $opt_g) {
+  do_start();
+} elsif (defined $opt_s) {
+  do_stop();
+} elsif (defined $opt_p) {
+  do_pull();
+} elsif (defined $opt_c) {
+  do_clean();
+}
+
+# ********************* sub section ******
+
+sub generate_host_tag() {
+  print "stub\n";
+}
 
 sub do_start() {
   print "started\n";
@@ -91,14 +137,14 @@ sub parse_conf() {
         foreach my $pool (keys %pools) {   
           my $cmd_aref = $pools{ $pool }[5];
           push(@$cmd_aref, $command);
-          $num_cmds = scalar @{ $cmd_aref };
+          $num_cmds = scalar @{$cmd_aref};
         } 
       } elsif(exists $pools{ $label }) {     # Have we seen this pool name?
         my $cmd_aref = $pools{ $label }[5];
         push(@$cmd_aref, $command);
         $num_cmds = scalar @{$cmd_aref};
       } else {                             # No.  No we have not.
-        die "I found a command that's looking for a pool that isn't defined... abort."
+        die "Nonexis... abort."
       } 
     }
 
@@ -205,41 +251,6 @@ sub dump_struct() {
 
 		print "  after: $cmd: $local: $remote\n"; 
 	  }
-      print "\n";
+     # print "\n";
   }
-}
-
-
-# ************ Main here *************************
-
-if(@ARGV != 3) {
-  die "I need you to feed me commands like this: tcap <command> -f <config_file>";
-}
-
-
-$retval = GetOptions('clean'    => \$opt_c,
-                     'go'       => \$opt_g,
-                     'stop'     => \$opt_s,
-                     'pull'     => \$opt_p,
-                     'file=s'   => \$opt_f);
-
-exit if !$retval;  # if getopt() ain't happy, we ain't happy
-
-if(!defined $opt_f) {
-  print "The -f argument specifying the config file to use is mandatory.\n";
-  exit 1;
-}
-
-&parse_conf($opt_f);
-
-#&dump_struct();
-
-if(defined $opt_g) {
-  do_start();
-} elsif (defined $opt_s) {
-  do_stop();
-} elsif (defined $opt_p) {
-  do_pull();
-} elsif (defined $opt_c) {
-  do_clean();
 }
