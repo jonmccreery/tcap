@@ -6,13 +6,13 @@ $DBG = 1;
 
 # The Ur symbol.  Everything starts here.
 my %pools;
-my $hosttag;
+my $cctag;
 
 use Getopt::Long; # qw(:config debug);
 
 # ***** Main
 
-if(@ARGV < 2) {
+if(@ARGV < 3) {
   die "I need you to feed me commands like this: tcap <command> -f <config_file>";
 }
 
@@ -33,7 +33,7 @@ if(!defined $opt_f) {
 
 if($DBG) { &dump_struct(); }
 
-$hosttag = &generate_host_tag();
+$cctag = &generate_host_tag();
 
 if(defined $opt_g) {
   do_start();
@@ -137,14 +137,12 @@ sub parse_conf() {
         foreach my $pool (keys %pools) {   
           my $cmd_aref = $pools{ $pool }[5];
           push(@$cmd_aref, $command);
-          $num_cmds = scalar @{$cmd_aref};
         } 
       } elsif(exists $pools{ $label }) {     # Have we seen this pool name?
         my $cmd_aref = $pools{ $label }[5];
         push(@$cmd_aref, $command);
-        $num_cmds = scalar @{$cmd_aref};
-      } else {                             # No.  No we have not.
-        die "Nonexis... abort."
+      } else {                               # No.  No we have not.
+        die "Nonexistant pool referenced... terminating."
       } 
     }
 
@@ -153,10 +151,11 @@ sub parse_conf() {
 #      print "M - $1 - $2\n";
       my ($label, $hostname) = ($1, $2);
       if(exists $pools{ $label }) {
-	    my $targets_aref = $pools{ $label }[2];
+	    my $targets_aref = $pools{ $label }->[2];
 		push(@$targets_aref, $hostname);
+		$num_targets++;
 	  } else {
-	    die "A MEMBER command referenced a pool that isn't defined.  Aborting."
+	    die "Nonexistant pool referenced... terminating."
       }
     }
 
@@ -169,21 +168,23 @@ sub parse_conf() {
 		  elsif ($epoch eq "after")  { $idx = 4; }
 		  else  { die "Invalid epoch." }
 
-		  my $push_aref = $pools{ $pool }[$idx];
+		  my $push_aref = $pools{ $pool }->[$idx];
 		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
 		  push(@$push_aref, \@push_atom);
 		}
       } elsif (exists $pools{ $label }) {
 		if ($epoch eq "before") {
-          my $push_aref = $pools{ $label }[3];
+          my $push_aref = $pools{ $label }->[3];
 		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
 		  push(@$push_aref, \@push_atom);
+		  $before_push++;
 		} elsif ($epoch eq "after") {
-		  my $push_aref = $pools{ $label }[4];
+		  my $push_aref = $pools{ $label }->[4];
 		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
 		  push(@$push_aref, \@push_atom);
+		  $after_push++;
 		} else {
-		  die "Invalid epoch.";
+		  die "Invalid epoch: $epoch";
 		}
 	  } else { die "A PUSH command referenced a pool that isn't defined. Aborting." }
     }
@@ -197,19 +198,19 @@ sub parse_conf() {
 		  elsif ($epoch eq "after")  { $idx = 4; }
 		  else  { die "invalid epoch." }
 
-		  my $push_aref = $pools{ $pool }[$idx];
-		  my @push_atom = ("PULL", $lpath, $rpath, $clean);
-		  push(@$push_aref, \@push_atom);
+		  my $pull_aref = $pools{ $pool }->[$idx];
+		  my @pull_atom = ("PULL", $lpath, $rpath, $clean);
+		  push(@$pull_aref, \@pull_atom);
 		}
       } elsif (exists $pools{ $label }) {
 		if ($epoch eq "before") {
-          my $push_aref = $pools{ $label }[3];
-		  my @push_atom = ("PULL", $lpath, $rpath, $clean);
-		  push(@$push_aref, \@push_atom);
+          my $pull_aref = $pools{ $label }->[3];
+		  my @pull_atom = ("PULL", $lpath, $rpath, $clean);
+		  push(@$pull_aref, \@push_atom);
 		} elsif ($epoch eq "after") {
-		  my $push_aref = $pools{ $label }[4];
-		  my @push_atom = ("PULL", $lpath, $rpath, $clean);
-		  push(@$push_aref, \@push_atom);
+		  my $pull_aref = $pools{ $label }->[4];
+		  my @pull_atom = ("PULL", $lpath, $rpath, $clean);
+		  push(@$pull_aref, \@pull_atom);
 		} else {
 		  die "Invalid epoch.";
 		}
@@ -218,6 +219,8 @@ sub parse_conf() {
       print "I didn't recognize this line: $line"
     }
   }
+
+ $num_cmds = scalar @{$cmd_aref};
 }
 
 sub dump_struct() {

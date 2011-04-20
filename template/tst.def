@@ -1,0 +1,15 @@
+# POOL:~:name:~:user:~:pss:~:
+# PULL:~:pool:~:file:~:when:~:
+# MEMBER:~:pool:~:ip/host:~:
+# COMMAND:~:pool:~:command:~:when:~:clean:~:
+
+POOL:~:test:~:root:~:lab4@tt:~:
+
+MEMBER:~:test:~:155.165.231.14:~:
+MEMBER:~:test:~:155.165.231.15:~:
+MEMBER:~:test:~:155.165.231.16:~:
+
+# ************* Set up environment **************
+COMMAND:~:ALL:~:touch running:~:before:~::~:
+COMMAND:~:ALL:~:date +%s > start_time.txt:~:before:~::~:
+PULL:~:ALL:~:start_time.txt:~:.:~:after:~:
