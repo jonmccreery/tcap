@@ -1,7 +1,50 @@
 #!/usr/bin/perl
 
+use Getopt::Long;
+
 # The Ur symbol.  Everything starts here.
 %pools;
+
+sub do_start() {
+  print "started\n";
+
+  # check run status
+  # loop through pools and
+    # run before push
+    # run before pull
+    # cmds
+
+  # report errors/stats
+}
+
+sub do_stop()  {
+  print "stopped\n";
+
+  # exit if already stopped
+  # loop through pools and
+    # run after pull
+    # run after push
+    # del remote 'running' semaphores
+}
+
+sub do_pull()  {
+  print "pulled\n";
+
+  # loop through pools and 
+    # check remote for dirs and run PULL:afters
+}
+
+sub do_clean() {
+  print "cleaned\n";
+
+  # warn and die if running
+  # loop through pools and
+    # rm all local  :clean
+    # rm all remote :clean
+    # kill all remote cmds
+    # rmdir remote tmp dirs
+    # archive local dir
+}
 
 sub parse_conf() {
   my $conf = shift;
@@ -168,10 +211,35 @@ sub dump_struct() {
 
 
 # ************ Main here *************************
-@ARGV == 1 or die "You gotta gimme a config file to parse... you know this dude...\n";
 
-($conf) = @ARGV;
+if(@ARGV != 3) {
+  die "I need you to feed me commands like this: tcap <command> -f <config_file>";
+}
 
-&parse_conf($conf);
 
-&dump_struct();
+$retval = GetOptions('clean'    => \$opt_c,
+                     'go'       => \$opt_g,
+                     'stop'     => \$opt_s,
+                     'pull'     => \$opt_p,
+                     'file=s'   => \$opt_f);
+
+exit if !$retval;  # if getopt() ain't happy, we ain't happy
+
+if(!defined $opt_f) {
+  print "The -f argument specifying the config file to use is mandatory.\n";
+  exit 1;
+}
+
+&parse_conf($opt_f);
+
+#&dump_struct();
+
+if(defined $opt_g) {
+  do_start();
+} elsif (defined $opt_s) {
+  do_stop();
+} elsif (defined $opt_p) {
+  do_pull();
+} elsif (defined $opt_c) {
+  do_clean();
+}
