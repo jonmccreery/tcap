@@ -1,6 +1,7 @@
 #!/usr/bin/perl
 
 # Globals
+# my @pool_attr = ($user, $pass, $targets_aref, $befores_aref, $afters_aref, $commands_aref);
 
 $DBG = 1;
 
@@ -9,6 +10,7 @@ my %pools;
 my $cctag;
 
 use Getopt::Long; # qw(:config debug);
+use IO::Socket::INET;
 
 # ***** Main
 
@@ -33,7 +35,9 @@ if(!defined $opt_f) {
 
 if($DBG) { &dump_struct(); }
 
-$cctag = &generate_host_tag();
+$cctag = &validate_targets();
+
+if($DBG) { &dump_struct(); }
 
 if(defined $opt_g) {
   do_start();
@@ -47,8 +51,52 @@ if(defined $opt_g) {
 
 # ********************* sub section ******
 
-sub generate_host_tag() {
-  print "stub\n";
+sub validate_targets() {
+  $time_limit = 1;
+
+  foreach $pool (keys %pools) {
+#    $num_tgts = scalar @{$pools{ $pool }->[2]};
+#    print  $pool  . " : " . $num_tgts . "\n";
+    next if ($num_tgts == 0);
+
+    #  iterate over all hosts, pruning the ones we can't hit off of
+    #  the target list.... no point blowing time timing out on hosts.
+    my $index = 0;
+    $tgt_aref = $pools{ $pool }->[2];
+    while( $index < scalar(@$tgt_aref)) {
+#       $tmp = scalar @{$tgt_aref};
+#       print "index: $index " . "size of array: $tmp\n";
+       $tgt = @$tgt_aref[$index];
+
+       if($DBG) { print "testing connection to $tgt" . "\n"; }
+
+       eval {
+         local $SIG{ALRM} = sub {
+           if($DBG) { print "unable to connect to $tgt\n"; }
+           splice @$tgt_aref, $index, 1;
+           next;
+         };
+
+         alarm $time_limit;
+         my $socket = IO::Socket::INET->new(
+                          PeerAddr => $tgt,
+                          PeerPort => 22,
+                          Proto    => 'tcp',
+                          );
+
+         # on a _completely_ different note, set our controller tag to 
+         # the IP that we use to connect to the first responsive target.
+         if (!defined($cctag) && $socket->sockhost) { 
+           $cctag = $socket->sockhost;
+           if($DBG) { print "cctag set to: $cctag\n"; }
+         }
+         $index++;
+         alarm 0;
+       };
+       alarm 0; # race protection
+    }
+  }
+  print "\n";
 }
 
 sub do_start() {
@@ -162,59 +210,64 @@ sub parse_conf() {
     # PUSH:label:lpath:rpath:epoch:clean:
     elsif($line =~ /^PUSH:~:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
       my ($label, $lpath, $rpath, $epoch, $clean) = ($1, $2, $3, $4);
-	  if($label =~ /ALL/) {
-	    foreach my $pool (keys %pools) {
-		  if    ($epoch eq "before") { $idx = 3; }
-		  elsif ($epoch eq "after")  { $idx = 4; }
-		  else  { die "Invalid epoch." }
+	    if($label =~ /ALL/) {
+	      foreach my $pool (keys %pools) {
+  
+  		    if    ($epoch eq "before") { $idx = 3; }
+   		    elsif ($epoch eq "after")  { $idx = 4; }
+	  	    else  { die "Invalid epoch." }
 
-		  my $push_aref = $pools{ $pool }->[$idx];
-		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
-		  push(@$push_aref, \@push_atom);
-		}
+	    	  my $push_aref = $pools{ $pool }->[$idx];
+	    	  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
+	    	  push(@$push_aref, \@push_atom);
+	    	}
+
       } elsif (exists $pools{ $label }) {
-		if ($epoch eq "before") {
+		    if ($epoch eq "before") {
           my $push_aref = $pools{ $label }->[3];
-		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
-		  push(@$push_aref, \@push_atom);
-		  $before_push++;
-		} elsif ($epoch eq "after") {
-		  my $push_aref = $pools{ $label }->[4];
-		  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
-		  push(@$push_aref, \@push_atom);
-		  $after_push++;
-		} else {
-		  die "Invalid epoch: $epoch";
-		}
-	  } else { die "A PUSH command referenced a pool that isn't defined. Aborting." }
+		      my @push_atom = ("PUSH", $lpath, $rpath, $clean);
+
+		      push(@$push_aref, \@push_atom);
+		      $before_push++;
+		    } elsif ($epoch eq "after") {
+		      my $push_aref = $pools{ $label }->[4];
+		      my @push_atom = ("PUSH", $lpath, $rpath, $clean);
+
+		      push(@$push_aref, \@push_atom);
+		      $after_push++;
+		    } else {
+		      die "Invalid epoch: $epoch";
+		    }
+	    } else { die "A PUSH command referenced a pool that isn't defined. Aborting." }
     }
 
     # PULL:pool:lpath:rpath:epoch:
     elsif($line =~ /^PULL:~:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
       my ($label, $lpath, $rpath, $epoch) = ($1, $2, $3, $4);
-	  if($label =~ /ALL/) {
-	    foreach my $pool (keys %pools) {
-		  if    ($epoch eq "before") { $idx = 3; }
-		  elsif ($epoch eq "after")  { $idx = 4; }
-		  else  { die "invalid epoch." }
+  	  if($label =~ /ALL/) {
+  	    foreach my $pool (keys %pools) {
 
-		  my $pull_aref = $pools{ $pool }->[$idx];
-		  my @pull_atom = ("PULL", $lpath, $rpath, $clean);
-		  push(@$pull_aref, \@pull_atom);
-		}
+  		    if    ($epoch eq "before") { $idx = 3; }
+  		    elsif ($epoch eq "after")  { $idx = 4; }
+  		    else  { die "invalid epoch." }
+
+  		    my $pull_aref = $pools{ $pool }->[$idx];
+  		    my @pull_atom = ("PULL", $lpath, $rpath, $clean);
+  		    push(@$pull_aref, \@pull_atom);
+		    }
       } elsif (exists $pools{ $label }) {
-		if ($epoch eq "before") {
+	    	if ($epoch eq "before") {
           my $pull_aref = $pools{ $label }->[3];
-		  my @pull_atom = ("PULL", $lpath, $rpath, $clean);
-		  push(@$pull_aref, \@push_atom);
-		} elsif ($epoch eq "after") {
-		  my $pull_aref = $pools{ $label }->[4];
-		  my @pull_atom = ("PULL", $lpath, $rpath, $clean);
-		  push(@$pull_aref, \@pull_atom);
-		} else {
-		  die "Invalid epoch.";
-		}
-	  } else { die "A PULL command referenced a pool that isn't defined. Aborting." }
+	   	  	my @pull_atom = ("PULL", $lpath, $rpath, $clean);
+		      push(@$pull_aref, \@push_atom);
+		    } elsif ($epoch eq "after") {
+		      my $pull_aref = $pools{ $label }->[4];
+		      my @pull_atom = ("PULL", $lpath, $rpath, $clean);
+		      push(@$pull_aref, \@pull_atom);
+		    } else {
+		      die "Invalid epoch.";
+		    }
+	    } else { die "A PULL command referenced a pool that isn't defined. Aborting." }
     } else {
       print "I didn't recognize this line: $line"
     }
@@ -254,6 +307,6 @@ sub dump_struct() {
 
 		print "  after: $cmd: $local: $remote\n"; 
 	  }
-     # print "\n";
+      print "\n";
   }
 }

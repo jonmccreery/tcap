@@ -5,6 +5,7 @@
 
 POOL:~:test:~:root:~:lab4@tt:~:
 
+#MEMBER:~:test:~:111.222.111.222:~:
 MEMBER:~:test:~:155.165.231.14:~:
 MEMBER:~:test:~:155.165.231.15:~:
 MEMBER:~:test:~:155.165.231.16:~:
