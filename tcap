@@ -52,10 +52,11 @@ if(defined $opt_g) {
 # ********************* sub section ******
 
 sub validate_targets() {
+  my $first_responder;
   $time_limit = 1;
 
   foreach $pool (keys %pools) {
-#    $num_tgts = scalar @{$pools{ $pool }->[2]};
+    $num_tgts = scalar @{$pools{ $pool }->[2]};
 #    print  $pool  . " : " . $num_tgts . "\n";
     next if ($num_tgts == 0);
 
@@ -86,9 +87,9 @@ sub validate_targets() {
 
          # on a _completely_ different note, set our controller tag to 
          # the IP that we use to connect to the first responsive target.
-         if (!defined($cctag) && $socket->sockhost) { 
-           $cctag = $socket->sockhost;
-           if($DBG) { print "cctag set to: $cctag\n"; }
+         if (!defined($first_responder) && $socket->sockhost) { 
+           $first_responder = $socket->sockhost;
+           if($DBG) { print "first_responder set to: $first_responder\n"; }
          }
          $index++;
          alarm 0;
@@ -97,6 +98,7 @@ sub validate_targets() {
     }
   }
   print "\n";
+  return $first_responder;
 }
 
 sub do_start() {
