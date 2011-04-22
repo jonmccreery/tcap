@@ -1,16 +1,17 @@
 #!/usr/bin/perl
+$DBG = 1;
 
 # Globals
 # my @pool_attr = ($user, $pass, $targets_aref, $befores_aref, $afters_aref, $commands_aref);
 
-$DBG = 1;
 
 # The Ur symbol.  Everything starts here.
-my %pools;
+%pools;
 my $cctag;
 
 use Getopt::Long; # qw(:config debug);
 use IO::Socket::INET;
+use Net::SSH::Expect;
 
 # ***** Main
 
@@ -33,11 +34,17 @@ if(!defined $opt_f) {
 # template file was well formed, but no checks have been done on any targets.
 &parse_conf($opt_f);
 
-if($DBG) { &dump_struct(); }
+&DBG(sub{&dump_struct();});
 
 $cctag = &validate_targets();
 
-if($DBG) { &dump_struct(); }
+&DBG(sub{&dump_struct();});
+
+#$command = 'touch /tmp/test';
+#&run_one_cmd('test', $command, "192.168.1.201");
+
+# my @cmds = ('mkdir /tmp/test','date > /tmp/test/date');
+# &run_cmds('test', \@cmds, '192.168.1.201');
 
 if(defined $opt_g) {
   do_start();
@@ -51,9 +58,16 @@ if(defined $opt_g) {
 
 # ********************* sub section ******
 
+sub DBG() {
+	if($DBG) {
+		$cmd_sref = $_[0];
+		&$cmd_sref;
+	}
+}
+
 sub validate_targets() {
   my $first_responder;
-  $time_limit = 1;
+  $time_limit = 3;
 
   foreach $pool (keys %pools) {
     $num_tgts = scalar @{$pools{ $pool }->[2]};
@@ -62,18 +76,21 @@ sub validate_targets() {
 
     #  iterate over all hosts, pruning the ones we can't hit off of
     #  the target list.... no point blowing time timing out on hosts.
-    my $index = 0;
+	
+    my $index = 0;  # there's subtlty in this index management
     $tgt_aref = $pools{ $pool }->[2];
     while( $index < scalar(@$tgt_aref)) {
 #       $tmp = scalar @{$tgt_aref};
 #       print "index: $index " . "size of array: $tmp\n";
        $tgt = @$tgt_aref[$index];
 
-       if($DBG) { print "testing connection to $tgt" . "\n"; }
+       &DBG(sub{ print "testing connection to $tgt" . "\n";} );
 
        eval {
+				 # this gets fired off when the alarm() times out.  we
+				 # kill that target.
          local $SIG{ALRM} = sub {
-           if($DBG) { print "unable to connect to $tgt\n"; }
+           &DBG(sub{print "unable to connect to $tgt\n";});
            splice @$tgt_aref, $index, 1;
            next;
          };
@@ -89,7 +106,7 @@ sub validate_targets() {
          # the IP that we use to connect to the first responsive target.
          if (!defined($first_responder) && $socket->sockhost) { 
            $first_responder = $socket->sockhost;
-           if($DBG) { print "first_responder set to: $first_responder\n"; }
+           &DBG(sub{print "first_responder set to: $first_responder\n";});
          }
          $index++;
          alarm 0;
@@ -97,9 +114,68 @@ sub validate_targets() {
        alarm 0; # race protection
     }
   }
-  print "\n";
+  &DBG(sub{print "\n";});
   return $first_responder;
 }
+
+sub run_one_cmd() {
+  my ($pool, $cmd, $tgt) = @_; 
+	my $user = $pools{$pool}[0];
+	my $pass = $pools{$pool}[1];
+
+	my $ssh = Net::SSH::Expect->new (
+										host     => $tgt,
+										password => $pass,
+										user     => $user,
+										timeout  => 1,
+										raw_pty  => 1,
+										);
+
+  my $login_out = $ssh->login();
+#	print "From the other side $login_out\n";
+
+	$result = $ssh->exec($cmd);
+	$ssh->close();
+}
+
+sub run_cmds() {
+  my ($pool, $cmd_aref, $tgt) = @_; 
+	my $user = $pools{$pool}[0];
+	my $pass = $pools{$pool}[1];
+
+#  my $num_cmds = scalar @{$cmd_aref};
+#  print "$cmd_aref, $num_cmds\n";
+
+	my $ssh = Net::SSH::Expect->new (
+										host     => $tgt,
+										password => $pass,
+										user     => $user,
+										timeout  => 1,
+										raw_pty  => 1,
+										);
+
+  my $login_out = $ssh->login();
+#	$login_out =~ /#$/;
+#	print "login: $login_out\n";
+
+	foreach my $cmd (@$cmd_aref) {
+		print "cmd: $cmd\n";
+	  $result = $ssh->exec($cmd);
+	}
+
+  $ssh->close();
+}
+
+#	$spawn=Expect->spawn($cmd);
+#	my $PROMPT = '[\]\$\>\#]\s$';
+#	my $exp_ret = $spawn->expect(
+#			2,
+#			[ qr/\(yes\/no\)\?\s*$/ => sub { $spawn->send("yes\n"); exp_continue; } ],
+#			[ qr/assword:\s*$/      => sub { $spawn->send("got69hic\n"); exp_continue; } ],
+#			[ qr/ogin:\s*$/         => sub { $spawn->send("$username\n"); exp_continue; } ],
+#			[ qr/$PROMPT/           => sub { $spawn->send("put $payload /tmp\n"); $spawn->send("quit\n"); } ],
+#		);
+# $spawn->interact();
 
 sub do_start() {
   print "started\n";
@@ -279,36 +355,26 @@ sub parse_conf() {
 }
 
 sub dump_struct() {
-  while (my ($key, $value) = each(%pools)) {
-	  my $pool         = $key;
-	  my $user         = $$value[0];
-	  my $pass         = $$value[1];
-	  my $targets_aref = $$value[2];
-      my $cmds_aref    = $$value[5];
-	  my $befores_aref = $$value[3];
-	  my $afters_aref  = $$value[4];
+	while (my ($key, $value) = each(%pools)) {
+		my ($pool, $user, $pass, $tgts_aref)         = ($key, $$value[0], $$value[1], $$value[2]);
+		my ($befores_aref, $afters_aref, $cmds_aref) = ($$value[3], $$value[4], $$value[5]);
 
 	  print "Pool: $pool user: $user pass: $pass\n";
+
 	  foreach(@$targets_aref) { my $tgt = $_; print "  tgt: $tgt \n"; }
-      foreach(@$cmds_aref)    { my $cmd = $_; print "  cmd: $cmd \n"; }
-      foreach(@$befores_aref) { 
-	    my $before = $_;
-		my $cmd    = $$before[0];
-		my $local  = $$before[1];
-		my $remote = $$before[2];
-		my $clean  = $$before[3];
+		foreach(@$cmds_aref)    { my $cmd = $_; print "  cmd: $cmd \n"; }
+		foreach(@$befores_aref) { 
+			my $before = $_;
+			my ($cmd, $local, $remote, $clean) = ($$before[0],$$before[1],$$before[2],$$before[3]);
 
-		print "  before: $cmd: $local: $remote\n"; 
+			print "  before: $cmd: $local: $remote\n"; 
 	  }
-      foreach(@$afters_aref) { 
+		foreach(@$afters_aref) { 
 	    my $after = $_;
-		my $cmd    = $$after[0];
-		my $local  = $$after[1];
-		my $remote = $$after[2];
-		my $clean  = $$after[3];
+			my ($cmd, $local, $remote, $clean) = ($$after[0],$$after[1],$$after[2],$$after[3]);
 
-		print "  after: $cmd: $local: $remote\n"; 
+			print "  after: $cmd: $local: $remote\n"; 
 	  }
-      print "\n";
+		print "\n";
   }
 }
