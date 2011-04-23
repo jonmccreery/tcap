@@ -1,14 +1,19 @@
 #!/usr/bin/perl
 $DBG = 1;
+$WORK_DIR = '/var/opt/lever/';
+$ARCHIVE_DIR = '/var/opt/lever/archive/';
 
-# Globals
 # my @pool_attr = ($user, $pass, $targets_aref, $befores_aref, $afters_aref, $commands_aref);
-
+# Globals
 
 # The Ur symbol.  Everything starts here.
-%pools;
-my $cctag;
+my %pools;
+my $mtag;         # labet that uniquely identifies the master
+my $ttag;         # label that uniquely identifies the templabe
+my $job_tag;      # This _must_be sufficiently singular to associate slaves w/ their master
+my $conf_path;
 
+# Uses
 use Getopt::Long; # qw(:config debug);
 use IO::Socket::INET;
 use Net::SSH::Expect;
@@ -16,7 +21,7 @@ use Net::SSH::Expect;
 # ***** Main
 
 if(@ARGV < 3) {
-  die "I need you to feed me commands like this: tcap <command> -f <config_file>";
+	die "I need you to feed me commands like this: tcap <command> -f <config_file>";
 }
 
 GetOptions('clean'    => \$opt_c,
@@ -26,9 +31,11 @@ GetOptions('clean'    => \$opt_c,
            'file=s'   => \$opt_f);
 
 if(!defined $opt_f) {
-  print "The -f argument specifying the config file to use is mandatory.\n";
-  exit 1;
+	print "The -f argument specifying the config file to use is mandatory.\n";
+	exit 1;
 }
+
+$conf_path = $opt_f;
 
 # Cram the template into memory...  When this sub exits, we can assume the
 # template file was well formed, but no checks have been done on any targets.
@@ -36,24 +43,26 @@ if(!defined $opt_f) {
 
 &DBG(sub{&dump_struct();});
 
-$cctag = &validate_targets();
+$mtag = &validate_targets();
+
+&init_env();
 
 &DBG(sub{&dump_struct();});
 
 #$command = 'touch /tmp/test';
-#&run_one_cmd('test', $command, "192.168.1.201");
+#&run_one_cmd('test', $command, "155.165.231.14");
 
 # my @cmds = ('mkdir /tmp/test','date > /tmp/test/date');
 # &run_cmds('test', \@cmds, '192.168.1.201');
 
 if(defined $opt_g) {
-  do_start();
+	do_start();
 } elsif (defined $opt_s) {
-  do_stop();
+	do_stop();
 } elsif (defined $opt_p) {
-  do_pull();
+	do_pull();
 } elsif (defined $opt_c) {
-  do_clean();
+	do_clean();
 }
 
 # ********************* sub section ******
@@ -65,73 +74,81 @@ sub DBG() {
 	}
 }
 
+sub init_env() {
+	die "I can't figure out what my id should be." unless ($mtag);
+
+	$conf_path =~ m/^.*\/([^.]*).*$/; 
+	$ttag = $1;
+	$job_tag = "$ttag.$mtag";
+	&DBG(sub{ print"job_tag set to: $job_tag\n\n"; });
+}
+
 sub validate_targets() {
-  my $first_responder;
-  $time_limit = 3;
+	my $local_ip;
+	$timeout = 1;
 
-  foreach $pool (keys %pools) {
-    $num_tgts = scalar @{$pools{ $pool }->[2]};
-#    print  $pool  . " : " . $num_tgts . "\n";
-    next if ($num_tgts == 0);
+	foreach $pool (keys %pools) {
+		$num_tgts = scalar @{$pools{ $pool }->[2]};
+#		print  $pool  . " : " . $num_tgts . "\n";
+		next if ($num_tgts == 0);
 
-    #  iterate over all hosts, pruning the ones we can't hit off of
-    #  the target list.... no point blowing time timing out on hosts.
-	
-    my $index = 0;  # there's subtlty in this index management
-    $tgt_aref = $pools{ $pool }->[2];
-    while( $index < scalar(@$tgt_aref)) {
-#       $tmp = scalar @{$tgt_aref};
-#       print "index: $index " . "size of array: $tmp\n";
-       $tgt = @$tgt_aref[$index];
+		#  iterate over all hosts, pruning the ones we can't hit off of
+		#  the target list.... no point blowing time timing out on hosts.
 
-       &DBG(sub{ print "testing connection to $tgt" . "\n";} );
+		my $index = 0;  # there's subtlty in this index management
+		$tgt_aref = $pools{ $pool }->[2];
+		while( $index < scalar(@$tgt_aref)) {
+#			 $tmp = scalar @{$tgt_aref};
+#			 print "index: $index " . "size of array: $tmp\n";
+			$tgt = @$tgt_aref[$index];
 
-       eval {
-				 # this gets fired off when the alarm() times out.  we
-				 # kill that target.
-         local $SIG{ALRM} = sub {
-           &DBG(sub{print "unable to connect to $tgt\n";});
-           splice @$tgt_aref, $index, 1;
-           next;
-         };
+			&DBG(sub{ print "testing connection to $tgt" . "\n";} );
 
-         alarm $time_limit;
-         my $socket = IO::Socket::INET->new(
-                          PeerAddr => $tgt,
+			eval {
+				# this gets fired off when the alarm() times out.  we
+				# kill that target.
+				local $SIG{ALRM} = sub {
+					&DBG(sub{print "unable to connect to $tgt\n";});
+					splice @$tgt_aref, $index, 1;
+					next;
+				};
+
+				alarm $timeout;
+				my $socket = IO::Socket::INET->new( PeerAddr => $tgt,
                           PeerPort => 22,
                           Proto    => 'tcp',
                           );
 
-         # on a _completely_ different note, set our controller tag to 
-         # the IP that we use to connect to the first responsive target.
-         if (!defined($first_responder) && $socket->sockhost) { 
-           $first_responder = $socket->sockhost;
-           &DBG(sub{print "first_responder set to: $first_responder\n";});
-         }
-         $index++;
-         alarm 0;
-       };
-       alarm 0; # race protection
-    }
-  }
-  &DBG(sub{print "\n";});
-  return $first_responder;
+				# on a _completely_ different note, set our controller tag to 
+				# the IP that we use to connect to the first responsive target.
+				if (!defined($mtag) && $socket->sockhost) { 
+					$local_ip = $socket->sockhost;
+					&DBG(sub{print "local_ip set to: $local_ip\n";});
+				}
+				$index++;
+				alarm 0;
+			};
+			alarm 0; # race protection
+		}
+	}
+	&DBG(sub{print "\n";});
+	return $local_ip;
 }
 
 sub run_one_cmd() {
-  my ($pool, $cmd, $tgt) = @_; 
+	my ($pool, $cmd, $tgt) = @_; 
 	my $user = $pools{$pool}[0];
 	my $pass = $pools{$pool}[1];
 
 	my $ssh = Net::SSH::Expect->new (
-										host     => $tgt,
-										password => $pass,
-										user     => $user,
-										timeout  => 1,
-										raw_pty  => 1,
-										);
+                    host     => $tgt,
+                    password => $pass,
+                    user     => $user,
+                    timeout  => 1,
+                    raw_pty  => 1,
+                    );
 
-  my $login_out = $ssh->login();
+	my $login_out = $ssh->login();
 #	print "From the other side $login_out\n";
 
 	$result = $ssh->exec($cmd);
@@ -139,31 +156,31 @@ sub run_one_cmd() {
 }
 
 sub run_cmds() {
-  my ($pool, $cmd_aref, $tgt) = @_; 
+	my ($pool, $cmd_aref, $tgt) = @_; 
 	my $user = $pools{$pool}[0];
 	my $pass = $pools{$pool}[1];
 
-#  my $num_cmds = scalar @{$cmd_aref};
-#  print "$cmd_aref, $num_cmds\n";
+#	my $num_cmds = scalar @{$cmd_aref};
+#	print "$cmd_aref, $num_cmds\n";
 
 	my $ssh = Net::SSH::Expect->new (
-										host     => $tgt,
-										password => $pass,
-										user     => $user,
-										timeout  => 1,
-										raw_pty  => 1,
-										);
+                    host     => $tgt,
+                    password => $pass,
+                    user     => $user,
+                    timeout  => 1,
+                    raw_pty  => 1,
+                    );
 
-  my $login_out = $ssh->login();
+	my $login_out = $ssh->login();
 #	$login_out =~ /#$/;
 #	print "login: $login_out\n";
 
 	foreach my $cmd (@$cmd_aref) {
 		print "cmd: $cmd\n";
-	  $result = $ssh->exec($cmd);
+		$result = $ssh->exec($cmd);
 	}
 
-  $ssh->close();
+	$ssh->close();
 }
 
 #	$spawn=Expect->spawn($cmd);
@@ -177,181 +194,199 @@ sub run_cmds() {
 #		);
 # $spawn->interact();
 
+sub server_running() {
+	$job_dir = $WORK_DIR . $job_tag . "/";
+	&DBG(sub{ print "jd: $job_dir\n"; });
+
+	opendir(my $dh, $job_dir) || die "Can't up $job_dir: $!";
+
+	@items = readdir($dh);
+	foreach $item (@items) {
+		print "test: $item\n";
+		if ($item =~ /running/) { return 1 } 
+	}
+	return 0;
+}
+
 sub do_start() {
-  print "started\n";
 
-  # check run status
-  # loop through pools and
-    # run before push
-    # run before pull
-    # cmds
+	# exit if this template is already running
+	if(&server_running()) { die "Already running.\n"; }
+	else { 
+		print "Got through\n";
+	}
 
-  # report errors/stats
+	# loop through pools and
+		# run before push
+		# run before pull
+		# cmds
+
+	# report errors/stats
+	print "started\n";
 }
 
 sub do_stop()  {
-  print "stopped\n";
+	print "stopped\n";
 
-  # exit if already stopped
-  # loop through pools and
-    # run after pull
-    # run after push
-    # del remote 'running' semaphores
+	# exit if already stopped
+	# loop through pools and
+		# run after pull
+		# run after push
+		# del remote 'running' semaphores
 }
 
 sub do_pull()  {
-  print "pulled\n";
+	print "pulled\n";
 
-  # loop through pools and 
-    # check remote for dirs and run PULL:afters
+	# loop through pools and 
+		# check remote for dirs and run PULL:afters
 }
 
 sub do_clean() {
-  print "cleaned\n";
+	print "cleaned\n";
 
-  # warn and die if running
-  # loop through pools and
-    # rm all local  :clean
-    # rm all remote :clean
-    # kill all remote cmds
-    # rmdir remote tmp dirs
-    # archive local dir
+	# warn and die if running
+	# loop through pools and
+		# rm all local  :clean
+		# rm all remote :clean
+		# kill all remote cmds
+		# rmdir remote tmp dirs
+		# archive local dir
 }
 
 sub parse_conf() {
-  my $conf = shift;
+	my $conf = shift;
 
-  open(CONFFILE, "<", $conf) or die "I can't open the config file you gave me";
+	open(CONFFILE, "<", $conf) or die "I can't open the config file you gave me";
 
-  while(<CONFFILE>) {
-    my $line = $_;
+	while(<CONFFILE>) {
+		my $line = $_;
 
-    # clean up the input stream a bit...
-    $line =~ s/#.*$//;            # comments
-    if($line =~ /^ *$/) { next; } # whitespace only
+		# clean up the input stream a bit...
+		$line =~ s/#.*$//;            # comments
+		if($line =~ /^ *$/) { next; } # whitespace only
 
-	# pools are where everything starts...  Therefore, the first thing we do
-	# is pull the 'POOL' lines out and populate the %pools hash...  all other operations
-	# have a 'tag' argument (2nd field) that ties that operation to its pool.  We use
-	# this to index into the %pools hash.
-    # POOL:label:user:pass
-    if($line =~ /^POOL:~:(.*):~:(.*):~:(.*):~:$/) {
-#      print "P - $1 - $2 - $3\n";
-      my ($label, $user, $pass) = ($1, $2, $3);
+		# pools are where everything starts...  Therefore, the first thing we do
+		# is pull the 'POOL' lines out and populate the %pools hash...  all other operations
+		# have a 'tag' argument (2nd field) that ties that operation to its pool.  We use
+		# this to index into the %pools hash.
+		# POOL:label:user:pass
+		if($line =~ /^POOL:~:(.*):~:(.*):~:(.*):~:$/) {
+#			print "P - $1 - $2 - $3\n";
+			my ($label, $user, $pass) = ($1, $2, $3);
 
-      # these null array references anchor their respective lists of
-      # objects (but not _those_ kind of objects...*g*).
-      my $befores_aref   = [];
-      my $afters_aref    = [];
-      my $commands_aref  = [];
-      my $targets_aref   = [];
+			# these null array references anchor their respective lists of
+			# objects (but not _those_ kind of objects...*g*).
+			my $befores_aref   = [];
+			my $afters_aref    = [];
+			my $commands_aref  = [];
+			my $targets_aref   = [];
 
-      my @pool_attr = ($user, $pass, $targets_aref, $befores_aref, $afters_aref, $commands_aref);
+			my @pool_attr = ($user, $pass, $targets_aref, $befores_aref, $afters_aref, $commands_aref);
 
-      $pools{ $label } = \@pool_attr;
-    }
+			$pools{ $label } = \@pool_attr;
+		}
 
-    # COMMAND:pool:command:when:clean:
-    elsif($line =~ /^COMMAND:~:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
-#      print "C - $1 - $2 - $3 - $4\n";
-      my ($label, $command, $epoch, $clean) = ($1, $2, $3, $4);
+		# COMMAND:pool:command:when:clean:
+		elsif($line =~ /^COMMAND:~:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
+#			print "C - $1 - $2 - $3 - $4\n";
+			my ($label, $command, $epoch, $clean) = ($1, $2, $3, $4);
 
-      # If it's the 'ALL' pool or it's attached to a pool we've seen,
-      # push it into the struct... otherwise, this is a script typo
-      # and we die.
-      if($label =~ /ALL/) {
-        foreach my $pool (keys %pools) {   
-          my $cmd_aref = $pools{ $pool }[5];
-          push(@$cmd_aref, $command);
-        } 
-      } elsif(exists $pools{ $label }) {     # Have we seen this pool name?
-        my $cmd_aref = $pools{ $label }[5];
-        push(@$cmd_aref, $command);
-      } else {                               # No.  No we have not.
-        die "Nonexistant pool referenced... terminating."
-      } 
-    }
+			# If it's the 'ALL' pool or it's attached to a pool we've seen,
+			# push it into the struct... otherwise, this is a script typo
+			# and we die.
+			if($label =~ /ALL/) {
+				foreach my $pool (keys %pools) {   
+					my $cmd_aref = $pools{ $pool }[5];
+					push(@$cmd_aref, $command);
+				} 
+			} elsif(exists $pools{ $label }) {     # Have we seen this pool name?
+				my $cmd_aref = $pools{ $label }[5];
+				push(@$cmd_aref, $command);
+			} else {                               # No.  No we have not.
+				die "Nonexistant pool referenced... terminating."
+			} 
+		}
 
-    # MEMBER:label:hostname:
-    elsif($line =~ /^MEMBER:~:(.*):~:(.*):~:$/) {
-#      print "M - $1 - $2\n";
-      my ($label, $hostname) = ($1, $2);
-      if(exists $pools{ $label }) {
-	    my $targets_aref = $pools{ $label }->[2];
-		push(@$targets_aref, $hostname);
-		$num_targets++;
-	  } else {
-	    die "Nonexistant pool referenced... terminating."
-      }
-    }
+		# MEMBER:label:hostname:
+		elsif($line =~ /^MEMBER:~:(.*):~:(.*):~:$/) {
+#			print "M - $1 - $2\n";
+			my ($label, $hostname) = ($1, $2);
+			if(exists $pools{ $label }) {
+				my $targets_aref = $pools{ $label }->[2];
+				push(@$targets_aref, $hostname);
+				$num_targets++;
+			} else {
+				die "Nonexistant pool referenced... terminating."
+			}
+		}
 
-    # PUSH:label:lpath:rpath:epoch:clean:
-    elsif($line =~ /^PUSH:~:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
-      my ($label, $lpath, $rpath, $epoch, $clean) = ($1, $2, $3, $4);
-	    if($label =~ /ALL/) {
-	      foreach my $pool (keys %pools) {
-  
-  		    if    ($epoch eq "before") { $idx = 3; }
-   		    elsif ($epoch eq "after")  { $idx = 4; }
-	  	    else  { die "Invalid epoch." }
+		# PUSH:label:lpath:rpath:epoch:clean:
+		elsif($line =~ /^PUSH:~:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
+			my ($label, $lpath, $rpath, $epoch, $clean) = ($1, $2, $3, $4);
+			if($label =~ /ALL/) {
+				foreach my $pool (keys %pools) {
 
-	    	  my $push_aref = $pools{ $pool }->[$idx];
-	    	  my @push_atom = ("PUSH", $lpath, $rpath, $clean);
-	    	  push(@$push_aref, \@push_atom);
-	    	}
+				if   ($epoch eq "before") { $idx = 3; }
+				elsif ($epoch eq "after")  { $idx = 4; }
+				else  { die "Invalid epoch." }
 
-      } elsif (exists $pools{ $label }) {
-		    if ($epoch eq "before") {
-          my $push_aref = $pools{ $label }->[3];
-		      my @push_atom = ("PUSH", $lpath, $rpath, $clean);
+				my $push_aref = $pools{ $pool }->[$idx];
+				my @push_atom = ("PUSH", $lpath, $rpath, $clean);
+				push(@$push_aref, \@push_atom);
+				}
+			} elsif (exists $pools{ $label }) {
+				if ($epoch eq "before") {
+					my $push_aref = $pools{ $label }->[3];
+					my @push_atom = ("PUSH", $lpath, $rpath, $clean);
 
-		      push(@$push_aref, \@push_atom);
-		      $before_push++;
-		    } elsif ($epoch eq "after") {
-		      my $push_aref = $pools{ $label }->[4];
-		      my @push_atom = ("PUSH", $lpath, $rpath, $clean);
+					push(@$push_aref, \@push_atom);
+					$before_push++;
+				} elsif ($epoch eq "after") {
+					my $push_aref = $pools{ $label }->[4];
+					my @push_atom = ("PUSH", $lpath, $rpath, $clean);
 
-		      push(@$push_aref, \@push_atom);
-		      $after_push++;
-		    } else {
-		      die "Invalid epoch: $epoch";
-		    }
-	    } else { die "A PUSH command referenced a pool that isn't defined. Aborting." }
-    }
+					push(@$push_aref, \@push_atom);
+					$after_push++;
+				} else {
+					die "Invalid epoch: $epoch";
+				}
+			} else { die "A PUSH command referenced a pool that isn't defined. Aborting." }
+		}
 
-    # PULL:pool:lpath:rpath:epoch:
-    elsif($line =~ /^PULL:~:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
-      my ($label, $lpath, $rpath, $epoch) = ($1, $2, $3, $4);
-  	  if($label =~ /ALL/) {
-  	    foreach my $pool (keys %pools) {
+		# PULL:pool:lpath:rpath:epoch:
+		elsif($line =~ /^PULL:~:(.*):~:(.*):~:(.*):~:(.*):~:$/) {
+			my ($label, $lpath, $rpath, $epoch) = ($1, $2, $3, $4);
+			if($label =~ /ALL/) {
+				foreach my $pool (keys %pools) {
 
-  		    if    ($epoch eq "before") { $idx = 3; }
-  		    elsif ($epoch eq "after")  { $idx = 4; }
-  		    else  { die "invalid epoch." }
+					if    ($epoch eq "before") { $idx = 3; }
+					elsif ($epoch eq "after")  { $idx = 4; }
+					else  { die "invalid epoch." }
 
-  		    my $pull_aref = $pools{ $pool }->[$idx];
-  		    my @pull_atom = ("PULL", $lpath, $rpath, $clean);
-  		    push(@$pull_aref, \@pull_atom);
-		    }
-      } elsif (exists $pools{ $label }) {
-	    	if ($epoch eq "before") {
-          my $pull_aref = $pools{ $label }->[3];
-	   	  	my @pull_atom = ("PULL", $lpath, $rpath, $clean);
-		      push(@$pull_aref, \@push_atom);
-		    } elsif ($epoch eq "after") {
-		      my $pull_aref = $pools{ $label }->[4];
-		      my @pull_atom = ("PULL", $lpath, $rpath, $clean);
-		      push(@$pull_aref, \@pull_atom);
-		    } else {
-		      die "Invalid epoch.";
-		    }
-	    } else { die "A PULL command referenced a pool that isn't defined. Aborting." }
-    } else {
-      print "I didn't recognize this line: $line"
-    }
-  }
+					my $pull_aref = $pools{ $pool }->[$idx];
+					my @pull_atom = ("PULL", $lpath, $rpath, $clean);
+					push(@$pull_aref, \@pull_atom);
+				}
+			} elsif (exists $pools{ $label }) {
+				if ($epoch eq "before") {
+					my $pull_aref = $pools{ $label }->[3];
+					my @pull_atom = ("PULL", $lpath, $rpath, $clean);
+					push(@$pull_aref, \@push_atom);
+				} elsif ($epoch eq "after") {
+					my $pull_aref = $pools{ $label }->[4];
+					my @pull_atom = ("PULL", $lpath, $rpath, $clean);
+					 push(@$pull_aref, \@pull_atom);
+				} else {
+					die "Invalid epoch.";
+				}
+			} else { die "A PULL command referenced a pool that isn't defined. Aborting." }
+		} else {
+			print "I didn't recognize this line: $line"
+		}
+	}
 
- $num_cmds = scalar @{$cmd_aref};
+	$num_cmds = scalar @{$cmd_aref};
 }
 
 sub dump_struct() {
@@ -359,22 +394,22 @@ sub dump_struct() {
 		my ($pool, $user, $pass, $tgts_aref)         = ($key, $$value[0], $$value[1], $$value[2]);
 		my ($befores_aref, $afters_aref, $cmds_aref) = ($$value[3], $$value[4], $$value[5]);
 
-	  print "Pool: $pool user: $user pass: $pass\n";
+		print "Pool: $pool user: $user pass: $pass\n";
 
-	  foreach(@$targets_aref) { my $tgt = $_; print "  tgt: $tgt \n"; }
+		foreach(@$targets_aref) { my $tgt = $_; print "  tgt: $tgt \n"; }
 		foreach(@$cmds_aref)    { my $cmd = $_; print "  cmd: $cmd \n"; }
 		foreach(@$befores_aref) { 
 			my $before = $_;
 			my ($cmd, $local, $remote, $clean) = ($$before[0],$$before[1],$$before[2],$$before[3]);
 
 			print "  before: $cmd: $local: $remote\n"; 
-	  }
+		}
 		foreach(@$afters_aref) { 
-	    my $after = $_;
+			my $after = $_;
 			my ($cmd, $local, $remote, $clean) = ($$after[0],$$after[1],$$after[2],$$after[3]);
 
 			print "  after: $cmd: $local: $remote\n"; 
-	  }
+		}
 		print "\n";
-  }
+	}
 }
