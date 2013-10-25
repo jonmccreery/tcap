@@ -1,26 +1,30 @@
 #!/usr/bin/perl
 $DBG = 1;
-$WORK_DIR = '/var/opt/lever/';
-$ARCHIVE_DIR = '/var/opt/lever/archive/';
+$WORK_DIR = '/opt/lever/';
+$ARCHIVE_DIR = '/opt/lever/archive/';
 
 # my @pool_attr = ($user, $pass, $targets_aref, $befores_aref, $afters_aref, $commands_aref);
 # Globals
 
 # The Ur symbol.  Everything starts here.
 my %pools;
-my $mtag;         # labet that uniquely identifies the master
-my $ttag;         # label that uniquely identifies the templabe
-my $job_tag;      # This _must_be sufficiently singular to associate slaves w/ their master
-my $conf_path;
+my $Mtag;         # labet that uniquely identifies the master
+my $Ttag;         # label that uniquely identifies the templabe
+my $Jtag;         # This _must_be sufficiently singular to associate servers with their targets
+my $Template;
+my $working_dir;
+my $JobDir;
 
 # Uses
 use Getopt::Long; # qw(:config debug);
 use IO::Socket::INET;
 use Net::SSH::Expect;
+use Digest::MD5  qw(md5 md5_hex md5_base64);
+#use Net::SFTP;
 
 # ***** Main
 
-if(@ARGV < 3) {
+if(@ARGV < 2) {
 	die "I need you to feed me commands like this: tcap <command> -f <config_file>";
 }
 
@@ -30,12 +34,20 @@ GetOptions('clean'    => \$opt_c,
            'pull'     => \$opt_p,
            'file=s'   => \$opt_f);
 
+if(!defined $opt_f) { $opt_f = shift; }
+
 if(!defined $opt_f) {
 	print "The -f argument specifying the config file to use is mandatory.\n";
 	exit 1;
 }
 
-$conf_path = $opt_f;
+my $template_file = $opt_f;
+
+# As a convention, we set the name of the template to the config file's name with
+# its extension and path stripped off.
+($Template) = ($template_file =~ /^([^.]*).*$/);
+$Template   =~ s/^.*\/(.*)$/\1/;
+&DBG(sub{ print "Using Template: $Template\n"; });
 
 # Cram the template into memory...  When this sub exits, we can assume the
 # template file was well formed, but no checks have been done on any targets.
@@ -43,9 +55,7 @@ $conf_path = $opt_f;
 
 &DBG(sub{&dump_struct();});
 
-$mtag = &validate_targets();
-
-&init_env();
+&init();
 
 &DBG(sub{&dump_struct();});
 
@@ -74,13 +84,20 @@ sub DBG() {
 	}
 }
 
-sub init_env() {
-	die "I can't figure out what my id should be." unless ($mtag);
+sub init() {
 
-	$conf_path =~ m/^.*\/([^.]*).*$/; 
-	$ttag = $1;
-	$job_tag = "$ttag.$mtag";
-	&DBG(sub{ print"job_tag set to: $job_tag\n\n"; });
+	$Mtag = &validate_targets();
+	die "I can't figure out what my id should be." unless ($Mtag);
+
+	$Ttag       = $Template;
+	$Jtag       = "$Ttag.$Mtag";
+	&DBG(sub{ print"Jtag: $Jtag Mtag: $Mtag Ttag: $Ttag\n"; });
+
+	$ts_hash = md5_hex(time());
+	$ts_hash = substr($ts_hash, 0, 10);
+	&DBG(sub{ print "ts hash: $ts_hash\n"; });
+
+	$JobDir = $WORK_DIR . $Jtag . "." . $ts_hash;
 }
 
 sub validate_targets() {
@@ -92,8 +109,8 @@ sub validate_targets() {
 #		print  $pool  . " : " . $num_tgts . "\n";
 		next if ($num_tgts == 0);
 
-		#  iterate over all hosts, pruning the ones we can't hit off of
-		#  the target list.... no point blowing time timing out on hosts.
+		#  iterate over all hosts, pruning the ones we can't hit from
+		#  the target list.... no point in timing out on failed hosts.
 
 		my $index = 0;  # there's subtlty in this index management
 		$tgt_aref = $pools{ $pool }->[2];
@@ -121,7 +138,7 @@ sub validate_targets() {
 
 				# on a _completely_ different note, set our controller tag to 
 				# the IP that we use to connect to the first responsive target.
-				if (!defined($mtag) && $socket->sockhost) { 
+				if (!defined($Mtag) && $socket->sockhost) { 
 					$local_ip = $socket->sockhost;
 					&DBG(sub{print "local_ip set to: $local_ip\n";});
 				}
@@ -135,12 +152,31 @@ sub validate_targets() {
 	return $local_ip;
 }
 
+sub pull_one_file() {
+	my ($tgt, $user, $pass, $lpath, $rpath) = @_;
+	print ("(pull)user: $user pass: $pass lpath: $lpath rpath: $rpath\n");
+
+#	my $sftpe = Net::SFTP->new($tgt,(
+#									user=>$user,
+#									password=>$pass
+#									))
+
+#	$sftpe->scp($rpath, $lpath);
+}
+
+sub push_one_file() {
+	my ($user, $pass, $lpath, $rpath) = @_;
+	print ("(push)user: $user pass: $pass lpath: $lpath rpath: $rpath\n");
+
+}
+
+
 sub run_one_cmd() {
 	my ($pool, $cmd, $tgt) = @_; 
 	my $user = $pools{$pool}[0];
 	my $pass = $pools{$pool}[1];
 
-	my $ssh = Net::SSH::Expect->new (
+	my $ssh  = Net::SSH::Expect->new (
                     host     => $tgt,
                     password => $pass,
                     user     => $user,
@@ -172,14 +208,11 @@ sub run_cmds() {
                     );
 
 	my $login_out = $ssh->login();
-#	$login_out =~ /#$/;
-#	print "login: $login_out\n";
 
 	foreach my $cmd (@$cmd_aref) {
-		print "cmd: $cmd\n";
+		&DBG(sub{ "cmd: $cmd\n"; });
 		$result = $ssh->exec($cmd);
 	}
-
 	$ssh->close();
 }
 
@@ -195,39 +228,150 @@ sub run_cmds() {
 # $spawn->interact();
 
 sub server_running() {
-	$job_dir = $WORK_DIR . $job_tag . "/";
-	&DBG(sub{ print "jd: $job_dir\n"; });
+	$JobDir =~ /^.*\/(.*)\..*$/;
+	my $search_dir = $1;
+	&DBG(sub{ print "search dir: $search_dir\n"; });
 
-	opendir(my $dh, $job_dir) || die "Can't up $job_dir: $!";
+	opendir(my $wdh, $WORK_DIR);
+	my @tst_dirs = readdir($wdh);
 
-	@items = readdir($dh);
-	foreach $item (@items) {
-		print "test: $item\n";
-		if ($item =~ /running/) { return 1 } 
+	foreach my $tst_dir (@tst_dirs) {
+		if($tst_dir =~ /($search_dir)/) {
+			print "trying: " . $WORK_DIR . $tst_dir . "/.lever\n";
+			opendir(my $sandbox, $WORK_DIR . $tst_dir . "/.lever") || next; # can we open the directory we want?
+
+			@items = readdir($sandbox);
+			foreach $item (@items) {
+				if ($item =~ /running/) {
+					$working_dir = $WORK_DIR . $tst_dir;
+					return 1;
+				} # we found a 'running' file
+			}
+		}
 	}
 	return 0;
 }
 
+sub start_targets() {
+	my $tgt_dirname = "$Template.$Mtag";
+	my $tgt_path = "/tmp/$Template.$Mtag";
+#	print $tgt_dirname . "\n";
+
+	while(my($key, $value) = each(%pools)) {
+#		print "key: $key value: $value\n";
+		my ($pool, $user, $pass, $tgts) = ($key, $$value[0], $$value[1], $$value[2]);
+		my ($befores, $cmds)            = ($$value[3], $$value[5]);
+
+		foreach (@$tgts) {
+			$tgt = $_;
+			print "Starting: $tgt, $user, $pass\n";
+
+			my $ssh = Net::SSH::Expect->new (
+   		                 host     => $tgt,
+     		             password => $pass,
+       		             user     => $user,
+         		         timeout  => 1,
+           		         raw_pty  => 1,
+             		     );
+
+			my $login_out = $ssh->login();
+
+			$result = $ssh->exec("ls /tmp");
+#			&DBG(sub{ print "result: $result\n"; } );
+
+			if($result =~ /$tgt_dirname/) {  # we're already going here...  move on
+				print "already running on: $tgt\n"; 
+				$ssh->close();
+			} else {                           # perform startup boilerplate
+				$ssh->exec("mkdir $tgt_path");
+				$ssh->exec("mkdir $tgt_path/.lever");
+				$ssh->exec("touch $tgt_path/.lever/running");
+				printf "started: $tgt\n"
+			}
+
+			#my @pull_atom = ("PULL", $lpath, $rpath, $clean);
+			#my @pool_attr = ($user, $pass, $targets_aref, $befores_aref, $afters_aref, $commands_aref);
+			foreach (@$befores) {
+				my $before = $_;
+				$lpath = $$before[1];
+				$rpath = $$before[2];
+
+				if(substr($lpath, 0, 1) eq '/') {}
+				else                            { $lpath = "$working_dir/$tgt/" . $lpath }
+
+				if(substr($rpath, 0, 1) eq '/') {}
+				else                            { $rpath = "/tmp/$Jtag/$rpath"; }
+
+				if($$before[0] eq "PUSH") {
+					&push_one_file($user, $pass, $lpath, $rpath);
+#					print "push:: lpath: '$lpath' rpath: '$rpath'\n";
+				} elsif($$before[0] eq "PULL") {
+					&pull_one_file($user, $pass, $lpath, $rpath);
+#					print "pull: lpath: '$lpath' rpath: '$rpath'\n";
+				}
+			}
+
+			foreach (@cmds) {
+				my $cmd = $_;
+				&DBG(sub{ print "cmd: $cmd\n"; });
+				$result = $ssh->exec($cmd);
+				&DBG(sub{ print "result: $result\n"; });
+			}
+			$ssh->close();
+		}
+	}
+}
+
+# my @pool_attr = ($user, $pass, $targets_aref, $befores_aref, $afters_aref, $commands_aref);
 sub do_start() {
 
-	# exit if this template is already running
-	if(&server_running()) { die "Already running.\n"; }
-	else { 
-		print "Got through\n";
-	}
+	# exit if template is already running on the master
+	if(&server_running()) {
+		&DBG(sub{ print "Already running... freshening targets.\n" });
+		&start_targets();
+	} else { 
+		$scratch = "$JobDir/.lever";
 
-	# loop through pools and
+		mkdir $JobDir, 0777;
+		$working_dir = $JobDir;
+		print "wd: $working_dir\n";
+		mkdir $scratch, 0777;
+		if($JobDir) { `touch $scratch/running`; }
+
+		# create series of directories to hold PULL results
+		foreach my $pool (keys %pools) {
+			my $tgts = $pools{ $pool }[2];
+			foreach(@$tgts) {
+				mkdir "$working_dir/$_";
+			}
+		}
+
+		`echo $JobDir > $WORK_DIR/current`;
+
+		print "Master started\n";
+		&start_targets();
 		# run before push
 		# run before pull
 		# cmds
 
 	# report errors/stats
-	print "started\n";
+	}
 }
 
+# my @pool_attr = ($user, $pass, $targets_aref, $befores_aref, $afters_aref, $commands_aref);
 sub do_stop()  {
-	print "stopped\n";
+	my $current = `cat $WORK_DIR/current`;
 
+	if($current) { chomp($current); }
+	else         { print "Something's horribly wrong!?!  I can't find a 'current' file\n"; exit; }
+
+	my $sandbox = $current . "/.lever";
+
+	&DBG(sub{ print "current: $current\n"; });
+	unlink("$current/running") || die;
+	unlink("$WORK_DIR/current");
+
+	print "Master stopped\n";
 	# exit if already stopped
 	# loop through pools and
 		# run after pull
@@ -327,13 +471,13 @@ sub parse_conf() {
 			if($label =~ /ALL/) {
 				foreach my $pool (keys %pools) {
 
-				if   ($epoch eq "before") { $idx = 3; }
-				elsif ($epoch eq "after")  { $idx = 4; }
-				else  { die "Invalid epoch." }
+					if   ($epoch eq "before") { $idx = 3; }
+					elsif ($epoch eq "after")  { $idx = 4; }
+					else  { die "Invalid epoch." }
 
-				my $push_aref = $pools{ $pool }->[$idx];
-				my @push_atom = ("PUSH", $lpath, $rpath, $clean);
-				push(@$push_aref, \@push_atom);
+					my $push_aref = $pools{ $pool }->[$idx];
+					my @push_atom = ("PUSH", $lpath, $rpath, $clean);
+					push(@$push_aref, \@push_atom);
 				}
 			} elsif (exists $pools{ $label }) {
 				if ($epoch eq "before") {

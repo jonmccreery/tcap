@@ -7,9 +7,9 @@ POOL:~:test:~:root:~:ecalab328:~:
 
 #MEMBER:~:test:~:111.222.111.222:~:
 #MEMBER:~:test:~:155.165.231.14:~:
-MEMBER:~:test:~:155.165.231.15:~:
+#MEMBER:~:test:~:155.165.231.15:~:
 #MEMBER:~:test:~:155.165.231.16:~:
-#MEMBER:~:test:~:192.168.1.201:~:
+MEMBER:~:test:~:192.168.1.201:~:
 
 
 # ************* Set up environment **************
